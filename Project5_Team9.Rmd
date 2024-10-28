@@ -1,0 +1,152 @@
+---
+title: "Module 5 Project"
+author: "Ella Underwood, Emmett Carrier, Layne Kiratsous, and Majda Wahby"
+date: "2024-10-20"
+output: html_document
+bibliography: BIOL3040.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(geomorph)
+library(tidyverse)
+library(abind)
+library(phytools)
+library(parallel)
+
+```
+
+## Introduction
+The purpose of this project is to expand on the previous work by @shimada on shark body-shape to analyze how benthic or pelagic habitats influenced this relationship. @shimada used geometric morphometrics and a multivariate analysis to evaluate the groups proposed by previous scholars. They found that sharks fell into one of two morphotype groups. This project built off of their work by analyzing the body shapes of benthic and pelagic sharks, as well as the rate of evolution of morphology for pelagic and benthic sharks. 
+
+These two questions are interesting in the greater conversation of evolutionary research to identify which macroevolutionary events have contributed to diversity, in species or in phenotype. First we replicated the @shimada body-shape data set using landmark-based geometric morphometrics. We digitized 14 homologous landmarks on images of 220 species of sharks. Then we aligned our landmarks and extracted shape information to assess morphological disparity in a phylogenetic framework as well as difference in rate of morphological evolution between the pelagic and benthic sharks.
+
+
+
+## Methods
+First we established an array for analysis using the geomorph functions. We constructed the array from the digitized homologous landmark data from 220 shark species. This multidimensional array was created using abind() to facilitate shape analysis by species. Landmark alignment was performed with gpagen() to standardize the data. 
+
+Next, we performed a principal components analysis of our alignment to capture morphological variation across shark species and visualized the results in a scatter plot of the first two principal components. The PCA data was then enriched by adding habitat data to produce a new data frame with the fist four components and associated habitat information which was visualized a second time to examine morphological clustering by habitat. 
+
+Next, we performed a morphological disparity analysis by combining landmark  and habitat data into a data frame and tested for morphological disparity with 10,000 iterations to assess variability in morphology across habitats. The results were then summarized. 
+
+Finally, we measured evolutionary rates and analyzed habitat data. A phylogenetic tree was loaded and pruned to match our species of interest for comparative analysis. Evolutionary rates by habitat were assessed using a custom parallel function to calculate rates for each habitat group. Rate data was transformed and visualized with box plots comparing benthic and pelagic habitats. A two-sample t-test was performed to determine if the evolutionary rates between habitats were statistically significant.
+
+
+
+
+## Results
+```{r establishing array}
+shark_dat <- read_csv("shark_data.csv")
+
+f <- list.files("shark_points",full.names = T,pattern=".csv")
+
+xy <- read_csv(f,id="file") %>% 
+  select(file,X,Y) %>% 
+  mutate(Y=abs(Y-max(Y))) %>% 
+  mutate(file_name=gsub("*_.csv","",basename(file))) %>% 
+  left_join(shark_dat) 
+
+ldk_l <- list()
+
+shark_sp <- xy$sp %>% unique
+
+for(i in shark_sp){
+  ldk_l[[i]] <- xy %>% 
+    filter(sp==i) %>% 
+    select(X,Y) %>% 
+    data.frame
+}
+
+ldk <-  abind(ldk_l, along=3)
+
+dimnames(ldk)[[3]] <-names(ldk_l)
+
+ldk_al <- gpagen(ldk)
+
+```
+
+```{r habitat-morphospace relationship, cache=TRUE, fig.cap="Principal Components 1 vs 2 for morphological data"}
+pca <- gm.prcomp(ldk_al$coords)
+plot(pca)
+```
+
+``` {r PCA colored plot, cache = TRUE, fig.cap="Principal Components 1 vs 2 for morphological data, colored by habitat"}
+PCA <- pca$x %>% 
+  data.frame %>% 
+  select(Comp1:Comp4) %>% 
+  mutate(sp=rownames(pca$x)) %>% 
+  left_join(shark_dat)
+
+PCA %>% 
+  ggplot(aes(Comp1,Comp2,col=habitat))+geom_point()
+
+
+```
+
+```{r morphological disparity, cache=TRUE}
+gdf <- geomorph.data.frame(ldk_al,
+                             habitat=PCA$habitat
+)
+
+md <- morphol.disparity(coords ~ 1, groups= ~ habitat, data = gdf, iter = 10000, print.progress = FALSE)
+
+summary(md)
+
+#no significant morphological disparity
+
+```
+
+``` {r evolution-habitat, cache=TRUE, fig.cap = "Posterior distribution rates for each habitat"}
+phy <- readNexus("https://bcorgbio.github.io/class/data/shark_trees.nex")
+length(phy)
+phy2 <- keep.tip(phy,PCA$sp)
+gp_hab <- PCA$habitat
+names(gp_hab) <- PCA$sp
+er_fun <- function(x) {
+  er <- compare.evol.rates(A = ldk_al$coords,
+                           phy = x, method = "simulation", gp = gp_hab)
+}
+
+
+er_l <- mclapply(phy2, er_fun, mc.cores = detectCores() -
+                   2)
+
+er <- mclapply(er_l,function(x) {
+  er_ <- c(x$sigma.d.gp,x$sigma.d.ratio)
+  names(er_)[3] <-"ratio"
+  return(er_)
+}, mc.cores=detectCores()-2) %>% do.call(rbind,.) %>% data.frame
+
+
+er %>% 
+  pivot_longer(benthic:pelagic) %>% 
+  ggplot(aes(name,value)) + geom_boxplot()+xlab("rate of evolution") + ylab("habitat") 
+
+t.test(er$benthic, er$pelagic, alternative = "two.sided", var.equal = FALSE)
+
+```
+
+
+
+## Discussion
+The significant t-test result for the difference in evolution rate of morphology indicates that there is a significant difference in evolution rates between pelagic and benthic sharks. However, no significant morphological disparity between the two groups was found. This finding is particularly interesting when compared to the work of @irschick. While they observed general trends in body shape differences between pelagic and benthic species, our quantitative, phylogenetically-informed analysis suggests that these differences are not as pronounced or consistent as previously thought.
+
+This result challenges the assumption that habitat type (pelagic vs benthic) is a strong predictor of overall body shape in sharks. It suggests that the relationship between habitat and morphology in sharks may be more complex than previously understood. Factors other than habitat, such as phylogenetic history, feeding strategies, or other ecological variables, might play a more significant role in shaping shark morphology than previously recognized.
+
+Our findings highlight the importance of using rigorous statistical methods and phylogenetic comparative approaches in studying morphological evolution. While observational studies like @irschick provide valuable insights, our quantitative analysis reveals that the morphological differences between pelagic and benthic sharks are not statistically significant when accounting for phylogenetic relationships and using comprehensive shape data.
+
+This result opens up new questions about the factors influencing shark morphology and the adaptive significance of body shape in different habitats. It suggests that sharks may have evolved diverse strategies to adapt to different environments without necessarily converging on distinct body shapes for pelagic and benthic lifestyles.
+
+The lack of any significant morphological disparity between pelagic and benthic sharks could be a result of convergent evolution, which is an evolutionary model where different species independently evolve similar traits as a response to similar ecological pressures and environments. This may also lead to the assumption that selective pressures such as predation, reproduction and foraging behavior have a strong influence on body shape.
+
+
+
+## Author Contributions
+Ella ~ wrote the discussion section and found the related article 
+Layne ~ wrote the introduction and materials sections 
+Emmett ~ adapted the code and wrote the figure captions
+Majda ~ assisted in writing the introduction and discussion sections 
+
+
+## References
